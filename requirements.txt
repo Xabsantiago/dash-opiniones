@@ -1,0 +1,8 @@
+dash
+pandas
+nltk
+matplotlib
+wordcloud
+plotly
+transformers
+torch
