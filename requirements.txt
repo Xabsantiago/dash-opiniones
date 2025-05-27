@@ -1,7 +1,5 @@
 dash
-pandas
-nltk
-matplotlib
-wordcloud
 plotly
-
+pandas
+wordcloud
+nltk

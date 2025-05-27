@@ -1,151 +1,109 @@
-
-import pandas as pd
-import matplotlib.pyplot as plt
-from wordcloud import WordCloud
-from collections import Counter
 import nltk
-nltk.download('stopwords')
+nltk.data.path.append("nltk_data")  # Usar carpeta local para evitar descarga en Render
+
 from nltk.corpus import stopwords
-from dash import Dash, dcc, html, Input, Output, State
+from collections import Counter
+import pandas as pd
+import dash
+from dash import html, dcc, Input, Output
 import plotly.express as px
-from transformers import pipeline
+from wordcloud import WordCloud
 import base64
 import io
 
-# Modelos
-clasificador = pipeline("sentiment-analysis", model="nlptown/bert-base-multilingual-uncased-sentiment")
-resumen_modelo = pipeline("summarization", model="facebook/bart-large-cnn")
+# Leer opiniones
+df = pd.read_csv("opiniones_con_neutro.csv")
+stop_words = set(stopwords.words("spanish"))
 
-# App
-app = Dash(__name__)
-app.title = "Análisis de Opiniones de Clientes"
+# Tokenización y filtrado
+all_words = " ".join(df["Opinion"]).lower().split()
+filtered_words = [word for word in all_words if word.isalpha() and word not in stop_words]
 
-# Layout
+# Conteo de palabras
+word_counts = Counter(filtered_words)
+top_words = word_counts.most_common(10)
+
+# Generar nube de palabras como imagen base64
+wc = WordCloud(width=800, height=400, background_color="white").generate(" ".join(filtered_words))
+buf = io.BytesIO()
+wc.to_image().save(buf, format="PNG")
+encoded_wc = base64.b64encode(buf.getvalue()).decode()
+
+# Clasificación de sentimientos (ya debe estar en tu CSV)
+sentiment_counts = df["Sentimiento"].value_counts().reset_index()
+sentiment_counts.columns = ["Sentimiento", "Cantidad"]
+
+# App Dash
+app = dash.Dash(__name__)
+
 app.layout = html.Div([
-    html.H1("🗣️ Análisis de Opiniones de Clientes", style={'textAlign': 'center'}),
+    html.H1("Análisis de Opiniones", style={"textAlign": "center"}),
 
-    dcc.Upload(
-        id='upload-data',
-        children=html.Div(['Arrastra o selecciona un archivo CSV con una columna llamada "opiniones"']),
-        style={
-            'width': '100%', 'height': '60px', 'lineHeight': '60px',
-            'borderWidth': '1px', 'borderStyle': 'dashed',
-            'borderRadius': '5px', 'textAlign': 'center', 'margin': '10px'
-        },
-        multiple=False
-    ),
+    html.Div([
+        html.H3("📊 Top 10 Palabras Más Frecuentes"),
+        dcc.Graph(
+            figure=px.bar(
+                x=[w[0] for w in top_words],
+                y=[w[1] for w in top_words],
+                labels={"x": "Palabra", "y": "Frecuencia"},
+                title="Top 10 palabras más comunes"
+            )
+        ),
+    ]),
 
-    html.Div(id='output-data-upload'),
+    html.Div([
+        html.H3("☁️ Nube de Palabras"),
+        html.Img(src="data:image/png;base64,{}".format(encoded_wc), style={"width": "70%", "margin": "auto", "display": "block"}),
+    ]),
 
-    html.H2("🔍 Analizar nuevo comentario"),
-    dcc.Textarea(id='nuevo-comentario', style={'width': '100%'}, rows=4),
-    html.Button("Analizar", id='boton-analizar', n_clicks=0),
-    html.Div(id='salida-comentario')
+    html.Div([
+        html.H3("📈 Sentimientos"),
+        dcc.Graph(
+            figure=px.pie(
+                sentiment_counts,
+                values="Cantidad",
+                names="Sentimiento",
+                title="Distribución de sentimientos"
+            )
+        ),
+    ]),
+
+    html.Div([
+        html.H3("🔍 Tabla de Opiniones"),
+        dcc.Dropdown(
+            id="filtro_sentimiento",
+            options=[{"label": s, "value": s} for s in df["Sentimiento"].unique()] + [{"label": "Todos", "value": "Todos"}],
+            value="Todos",
+            placeholder="Filtrar por sentimiento"
+        ),
+        html.Br(),
+        html.Div(id="tabla_opiniones")
+    ])
 ])
 
-# === Funciones auxiliares ===
-
-def limpiar_texto(texto):
-    palabras = texto.lower().split()
-    return [p for p in palabras if p.isalpha() and p not in stopwords.words("spanish")]
-
-def generar_nube(opiniones):
-    texto = " ".join(opiniones)
-    palabras = limpiar_texto(texto)
-    nube = WordCloud(width=800, height=400, background_color='white').generate(" ".join(palabras))
-    img = io.BytesIO()
-    plt.figure(figsize=(10, 5))
-    plt.imshow(nube, interpolation='bilinear')
-    plt.axis('off')
-    plt.tight_layout()
-    plt.savefig(img, format='png')
-    plt.close()
-    img.seek(0)
-    return base64.b64encode(img.getvalue()).decode()
-
-def clasificar_sentimientos(opiniones):
-    etiquetas = []
-    for texto in opiniones:
-        estrellas = int(clasificador(texto)[0]['label'][0])
-        if estrellas >= 4:
-            etiquetas.append("Positivo")
-        elif estrellas == 3:
-            etiquetas.append("Neutro")
-        else:
-            etiquetas.append("Negativo")
-    return etiquetas
-
-def analizar_comentario(texto):
-    sentimiento = clasificador(texto)[0]['label']
-    resumen = resumen_modelo(texto[:1024])[0]['summary_text']
-    return sentimiento, resumen
-
-# === Callbacks ===
 
 @app.callback(
-    Output('output-data-upload', 'children'),
-    Input('upload-data', 'contents'),
-    State('upload-data', 'filename')
+    Output("tabla_opiniones", "children"),
+    Input("filtro_sentimiento", "value")
 )
-def procesar_csv(contents, filename):
-    if contents is None:
-        return
-    content_type, content_string = contents.split(',')
-    decoded = base64.b64decode(content_string)
-    df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
+def actualizar_tabla(filtro):
+    if filtro == "Todos":
+        filtrado = df
+    else:
+        filtrado = df[df["Sentimiento"] == filtro]
 
-    if "opiniones" not in df.columns:
-        return html.Div("❌ El archivo debe tener una columna llamada 'opiniones'.")
-
-    opiniones = df["opiniones"].dropna().astype(str).tolist()
-    if len(opiniones) != 20:
-        return html.Div("⚠️ El archivo debe contener exactamente 20 opiniones.")
-
-    df["Sentimiento"] = clasificar_sentimientos(opiniones)
-
-    # Gráfico de barras de palabras
-    palabras = limpiar_texto(" ".join(opiniones))
-    conteo = Counter(palabras).most_common(10)
-    palabras_top, frecs = zip(*conteo)
-    fig_barras = px.bar(x=palabras_top, y=frecs, labels={'x': 'Palabra', 'y': 'Frecuencia'}, title="Top 10 palabras")
-
-    # Pie chart de sentimientos
-    fig_pie = px.pie(df, names="Sentimiento", title="Distribución de Sentimientos")
-
-    # Nube de palabras
-    imagen_base64 = generar_nube(opiniones)
-
-    return html.Div([
-        html.H3("📊 Top 10 Palabras"),
-        dcc.Graph(figure=fig_barras),
-
-        html.H3("☁️ Nube de Palabras"),
-        html.Img(src="data:image/png;base64,{}".format(imagen_base64), style={'width': '100%'}),
-
-        html.H3("📈 Opiniones clasificadas"),
-        dcc.Graph(figure=fig_pie),
-
-        html.H3("🧾 Opiniones con Sentimiento"),
-        html.Table([
-            html.Tr([html.Th("Opinión"), html.Th("Sentimiento")])
-        ] + [html.Tr([html.Td(o), html.Td(s)]) for o, s in zip(df["opiniones"], df["Sentimiento"])])
+    return html.Table([
+        html.Tr([html.Th(col) for col in filtrado.columns])
+    ] + [
+        html.Tr([html.Td(filtrado.iloc[i][col]) for col in filtrado.columns])
+        for i in range(min(len(filtrado), 10))  # Mostrar máx 10
     ])
 
-@app.callback(
-    Output('salida-comentario', 'children'),
-    Input('boton-analizar', 'n_clicks'),
-    State('nuevo-comentario', 'value')
-)
-def analizar_nuevo(n_clicks, texto):
-    if n_clicks > 0 and texto:
-        sentimiento, resumen = analizar_comentario(texto)
-        return html.Div([
-            html.P(f"🟢 Sentimiento estimado: {sentimiento}"),
-            html.P("📝 Resumen generado:"),
-            html.Blockquote(resumen)
-        ])
 
 # === Ejecutar la app ===
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8080, debug=False)
     
+if __name__ == "__main__":
+    app.run_server(host="0.0.0.0", port=8080, debug=False)
+
