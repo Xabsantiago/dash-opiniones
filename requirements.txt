@@ -4,5 +4,4 @@ nltk
 matplotlib
 wordcloud
 plotly
-transformers
-torch
+
