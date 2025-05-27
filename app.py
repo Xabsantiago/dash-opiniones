@@ -16,7 +16,7 @@ df = pd.read_csv("opiniones_con_neutro.csv")
 stop_words = set(stopwords.words("spanish"))
 
 # Tokenización y filtrado
-all_words = " ".join(df["Opinion"]).lower().split()
+all_words = " ".join(df["opiniones"]).lower().split()
 filtered_words = [word for word in all_words if word.isalpha() and word not in stop_words]
 
 # Conteo de palabras
